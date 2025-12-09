@@ -1,5 +1,5 @@
 (function(global) {
-    console.log(" [Library] Loading 3D Engine v2.1 (Async Fix)...");
+    console.log(" [Library] Loading 3D Engine v2.2 (Cache Buster)...");
 
     // --- LIBRARY CONFIGURATION ---
     const CONFIG = {
@@ -261,7 +261,9 @@
                 const chunkMatch = content.match(/Chunk\s*=\s*(\d+)/i);
                 if (!chunkMatch) return;
                 const chunkId = chunkMatch[1];
-                const locMatch = content.match(/Location\s*=\s*M\s*:\s*([0-9,\|]+)/i);
+                
+                // Fixed regex to allow spaces in location list
+                const locMatch = content.match(/Location\s*=\s*M\s*:\s*([0-9,\|\s]+)/i);
                 if (locMatch) {
                     locMatch[1].split('|').forEach(pair => {
                         const [tx, tz] = pair.split(',').map(n => n.trim());
@@ -309,9 +311,25 @@
         }
     };
 
+    // --- API & VARIABLES ---
+
+    // 1. Protocol
     let pVal = "";
-    Object.defineProperty(global, 'Protocol', { get: () => pVal, set: (v) => { pVal = v; if(v==="Start") Engine.init(); } });
+    let existingProtocol = global.Protocol;
+    Object.defineProperty(global, 'Protocol', { 
+        get: () => pVal, 
+        set: (v) => { pVal = v; if(v==="Start") Engine.init(); } 
+    });
+    if (existingProtocol === "Start") Engine.init();
+
+    // 2. GameData (Map Commands)
     let mVal = "";
-    Object.defineProperty(global, 'GameData', { get: () => mVal, set: (v) => { mVal = v; Engine.parseMapCommand(v); } });
+    let existingGameData = global.GameData;
+    Object.defineProperty(global, 'GameData', { 
+        get: () => mVal, 
+        set: (v) => { mVal = v; Engine.parseMapCommand(v); } 
+    });
+    if (existingGameData) Engine.parseMapCommand(existingGameData);
+
     global.ChunkGameLib = { init: () => Engine.init() };
 })(window);
