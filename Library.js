@@ -50,7 +50,8 @@
 
     function waitForDOM() {
         return new Promise(resolve => {
-            if (document.body) {
+            // Robust check: if body exists or readyState is complete/interactive, go ahead.
+            if (document.body || document.readyState === 'complete' || document.readyState === 'interactive') {
                 resolve();
             } else {
                 console.log(" [Library] Waiting for DOM...");
@@ -265,17 +266,24 @@
     // 2. Define the Property with Getter/Setter
     let protocolValue = existingProtocol || "";
     
-    Object.defineProperty(global, 'Protocol', {
-        get: function() { return protocolValue; },
-        set: function(v) { 
-            console.log(" [Library] Protocol received:", v);
-            protocolValue = v;
-            if (v === "Start") {
-                Engine.init();
-            }
-        },
-        configurable: true
-    });
+    // Safe define
+    try {
+        Object.defineProperty(global, 'Protocol', {
+            get: function() { return protocolValue; },
+            set: function(v) { 
+                console.log(" [Library] Protocol received:", v);
+                protocolValue = v;
+                if (v === "Start") {
+                    Engine.init();
+                }
+            },
+            configurable: true
+        });
+    } catch(e) {
+        console.error(" [Library] Could not define 'Protocol' getter/setter. Manual init required if Protocol doesn't work.", e);
+        // Fallback: If defineProperty fails (rare), check variable polling? 
+        // No, usually just means variable was declared with 'var' in non-configurable context.
+    }
 
     // 3. Expose Engine Methods
     global.ChunkGameLib = {
