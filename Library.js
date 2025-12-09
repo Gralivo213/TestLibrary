@@ -1,4 +1,6 @@
 (function(global) {
+    console.log(" [Library] Loading 3D Engine...");
+
     // --- LIBRARY CONFIGURATION ---
     const CONFIG = {
         threeCDN: "https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js",
@@ -23,18 +25,37 @@
         BORDER: 0x000000  // Black
     };
 
-    // --- DEPENDENCY LOADER ---
+    // --- UTILITIES ---
     function loadScript(src) {
         return new Promise((resolve, reject) => {
+            // Check if already exists
             if (document.querySelector(`script[src="${src}"]`)) {
-                resolve(); // Already loaded
+                resolve();
                 return;
             }
+            console.log(` [Library] Fetching dependency: ${src}`);
             const script = document.createElement('script');
             script.src = src;
-            script.onload = resolve;
-            script.onerror = reject;
+            script.onload = () => {
+                console.log(` [Library] Dependency loaded: ${src}`);
+                resolve();
+            };
+            script.onerror = (e) => {
+                console.error(` [Library] Failed to load: ${src}`, e);
+                reject(e);
+            };
             document.head.appendChild(script);
+        });
+    }
+
+    function waitForDOM() {
+        return new Promise(resolve => {
+            if (document.body) {
+                resolve();
+            } else {
+                console.log(" [Library] Waiting for DOM...");
+                window.addEventListener('DOMContentLoaded', resolve);
+            }
         });
     }
 
@@ -42,26 +63,34 @@
     const Engine = {
         
         async init() {
-            if (isRunning) return;
-            console.log("Initializing Chunk System Library...");
+            if (isRunning) {
+                console.log(" [Library] Engine already running.");
+                return;
+            }
+            isRunning = true; // Prevent double firing
+            console.log(" [Library] Initialization Triggered.");
 
-            // 1. Ensure Dependencies are ready
+            // 1. Wait for HTML Body to exist (Crucial fix)
+            await waitForDOM();
+
+            // 2. Ensure Dependencies are ready
             if (typeof THREE === 'undefined') {
-                console.log("Loading Three.js...");
                 await loadScript(CONFIG.threeCDN);
             }
             if (typeof THREE.OrbitControls === 'undefined') {
-                console.log("Loading OrbitControls...");
-                await loadScript(CONFIG.orbitCDN);
+                // Check if OrbitControls is inside THREE (newer versions) or separate
+                if (!THREE.OrbitControls) { 
+                    await loadScript(CONFIG.orbitCDN);
+                }
             }
 
-            // 2. Start the Game
+            console.log(" [Library] Dependencies ready. Starting Scene.");
+
+            // 3. Start the Game
             this.setupDOM();
             this.setupScene();
             this.generateChunk(1, -(CHUNK_SIZE * TILE_SIZE) / 2, -(CHUNK_SIZE * TILE_SIZE) / 2);
             this.startLoop();
-            isRunning = true;
-            console.log("System Active. Visuals Rendering.");
         },
 
         setupDOM() {
@@ -74,8 +103,9 @@
                     background: rgba(0, 0, 0, 0.7); padding: 15px; border-radius: 8px;
                     pointer-events: none; border: 1px solid #444; min-width: 200px;
                     z-index: 9999;
+                    font-family: 'Segoe UI', sans-serif;
                 }
-                #lib-ui-layer h1 { margin: 0 0 10px 0; font-size: 1.2rem; color: #ffd700; }
+                #lib-ui-layer h1 { margin: 0 0 10px 0; font-size: 1.2rem; color: #ffd700; border-bottom: 1px solid #555; padding-bottom: 5px; }
                 .lib-info-row { margin-bottom: 5px; font-size: 0.9rem; }
                 .lib-highlight { color: #4db8ff; font-weight: bold; }
             `;
@@ -89,6 +119,7 @@
                 <div class="lib-info-row">Chunk ID: <span id="lib-chunk-display" class="lib-highlight">--</span></div>
                 <div class="lib-info-row">Tile Coordinate: <span id="lib-coord-display" class="lib-highlight">--</span></div>
                 <div class="lib-info-row">World Position: <span id="lib-world-display" class="lib-highlight">--</span></div>
+                <div style="margin-top:10px; font-size: 0.8rem; color: #888;">Engine Active</div>
             `;
             document.body.appendChild(ui);
 
@@ -186,6 +217,8 @@
         },
 
         handleHover() {
+            if (!raycaster || !mouse || !camera || !tileGroup) return;
+
             raycaster.setFromCamera(mouse, camera);
             const intersects = raycaster.intersectObjects(tileGroup.children);
 
@@ -198,16 +231,16 @@
                     
                     // Update UI
                     const data = intersectedTile.userData;
-                    uiElements.chunk.innerText = data.chunkId;
-                    uiElements.coord.innerText = `X: ${data.gridLocation.x}, Z: ${data.gridLocation.z}`;
-                    uiElements.world.innerText = `${Math.round(object.position.x)}, ${Math.round(object.position.z)}`;
+                    if(uiElements.chunk) uiElements.chunk.innerText = data.chunkId;
+                    if(uiElements.coord) uiElements.coord.innerText = `X: ${data.gridLocation.x}, Z: ${data.gridLocation.z}`;
+                    if(uiElements.world) uiElements.world.innerText = `${Math.round(object.position.x)}, ${Math.round(object.position.z)}`;
                 }
             } else {
                 if (intersectedTile) {
                     intersectedTile.material.color.setHex(intersectedTile.userData.originalColor);
-                    uiElements.chunk.innerText = "--";
-                    uiElements.coord.innerText = "--";
-                    uiElements.world.innerText = "--";
+                    if(uiElements.chunk) uiElements.chunk.innerText = "--";
+                    if(uiElements.coord) uiElements.coord.innerText = "--";
+                    if(uiElements.world) uiElements.world.innerText = "--";
                 }
                 intersectedTile = null;
             }
@@ -216,9 +249,9 @@
         startLoop() {
             const animate = () => {
                 requestAnimationFrame(animate);
-                controls.update();
+                if(controls) controls.update();
                 this.handleHover();
-                renderer.render(scene, camera);
+                if(renderer && scene && camera) renderer.render(scene, camera);
             };
             animate();
         }
@@ -226,23 +259,36 @@
 
     // --- EXPOSE API ---
     
-    // 1. Standard Global Object
+    // 1. Capture existing value if user defined Protocol before script loaded
+    let existingProtocol = global.Protocol;
+    
+    // 2. Define the Property with Getter/Setter
+    let protocolValue = existingProtocol || "";
+    
+    Object.defineProperty(global, 'Protocol', {
+        get: function() { return protocolValue; },
+        set: function(v) { 
+            console.log(" [Library] Protocol received:", v);
+            protocolValue = v;
+            if (v === "Start") {
+                Engine.init();
+            }
+        },
+        configurable: true
+    });
+
+    // 3. Expose Engine Methods
     global.ChunkGameLib = {
         init: () => Engine.init(),
         addChunk: (id, x, z) => Engine.generateChunk(id, x, z)
     };
 
-    // 2. The "Protocol" Trigger (Magic Keyword)
-    // This allows the command: Protocol = "Start" to work.
-    let protocolValue = "";
-    Object.defineProperty(global, 'Protocol', {
-        get: function() { return protocolValue; },
-        set: function(v) { 
-            protocolValue = v;
-            if (v === "Start") {
-                Engine.init();
-            }
-        }
-    });
+    console.log(" [Library] Ready. Waiting for Protocol='Start'...");
+
+    // 4. Trigger immediately if it was already set
+    if (existingProtocol === "Start") {
+        console.log(" [Library] Detected pre-set Protocol. Starting...");
+        Engine.init();
+    }
 
 })(window);
