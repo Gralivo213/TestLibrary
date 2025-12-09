@@ -1,5 +1,5 @@
 (function(global) {
-    console.log(" [Library] Loading 3D Engine v2.0 (Mountains)...");
+    console.log(" [Library] Loading 3D Engine v2.1 (Async Fix)...");
 
     // --- LIBRARY CONFIGURATION ---
     const CONFIG = {
@@ -7,7 +7,7 @@
         orbitCDN: "https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"
     };
 
-    // --- UTILS & NOISE ENGINE (Internal) ---
+    // --- NOISE ENGINE ---
     const Noise = (function() {
         const perm = new Uint8Array(512);
         const p = new Uint8Array(256);
@@ -65,19 +65,20 @@
 
     // Internal state
     let isRunning = false;
+    let isReady = false; // Flag to check if map is built
+    let queuedGameData = null; // Queue for data sent before ready
     let scene, camera, renderer, controls;
     let tileGroup, raycaster, mouse;
     let uiElements = {};
     let intersectedTile = null;
-    let tileRegistry = {}; // Look up tiles by ID "C_X_Z"
-    let mountainAssets = []; // Stores the 5 generated prototypes
+    let tileRegistry = {}; 
+    let mountainAssets = []; 
 
-    // Game Constants
     const TILE_SIZE = 2;
     const CHUNK_SIZE = 10;
     const COLORS = { BASE: 0xC2B280, HOVER: 0x8B4513, BORDER: 0x000000 };
 
-    // --- DEPENDENCY LOADING ---
+    // --- UTILS ---
     function loadScript(src) {
         return new Promise((resolve, reject) => {
             if (document.querySelector(`script[src="${src}"]`)) { resolve(); return; }
@@ -97,20 +98,16 @@
         });
     }
 
-    // --- ASSET GENERATION (MOUNTAINS) ---
+    // --- ASSETS ---
     const AssetGenerator = {
         generatePrototypes() {
-            console.log(" [Library] Generating Mountain Prototypes...");
-            for(let i=1; i<=5; i++) {
-                mountainAssets.push(this.createMountainMesh(i));
-            }
+            for(let i=1; i<=5; i++) mountainAssets.push(this.createMountainMesh(i));
         },
-
         createMountainMesh(type) {
-            const segments = 120; // High detail
-            const size = TILE_SIZE * 0.95; // Fit inside tile
+            const segments = 120; 
+            const size = TILE_SIZE * 0.95; 
             const geometry = new THREE.PlaneGeometry(size, size, segments, segments);
-            geometry.rotateX(-Math.PI / 2); // Lay flat
+            geometry.rotateX(-Math.PI / 2); 
             
             const pos = geometry.attributes.position;
             const seed = Math.random() * 100;
@@ -119,43 +116,21 @@
                 const x = pos.getX(i);
                 const z = pos.getZ(i);
                 const dist = Math.sqrt(x*x + z*z);
-                
-                // --- Shape Logic ---
                 let mask = 0, nAmp = 1, nScale = 1;
                 
-                if (type === 1) { // Classic
-                    mask = Math.pow(Math.max(0, 1.0 - dist), 1.5);
-                    nAmp = 1.2;
-                } else if (type === 2) { // Ridge
-                    const d = Math.sqrt((x*x)*4.0 + z*z); 
-                    mask = Math.max(0, 1.0 - d);
-                    nAmp = 1.4; nScale = 0.8;
-                } else if (type === 3) { // Massif
-                    mask = Math.pow(Math.max(0, 1.0 - Math.max(Math.abs(x), Math.abs(z))), 0.5);
-                    nAmp = 1.0; nScale = 1.2;
-                } else if (type === 4) { // Twin
-                    const d1 = Math.sqrt(Math.pow(x-0.4, 2) + z*z);
-                    const d2 = Math.sqrt(Math.pow(x+0.4, 2) + z*z);
-                    mask = Math.max(Math.max(0, 0.9 - d1), Math.max(0, 0.9 - d2));
-                    nAmp = 1.3;
-                } else if (type === 5) { // Volcano
-                    let d = Math.sqrt(x*x + z*z);
-                    mask = Math.max(0, 1.0 - d);
-                    if (d < 0.3) mask -= (0.3 - d) * 2.0;
-                    mask = Math.max(0, mask);
-                    nAmp = 0.8; nScale = 1.5;
-                }
+                if (type === 1) { mask = Math.pow(Math.max(0, 1.0 - dist), 1.5); nAmp = 1.2; }
+                else if (type === 2) { const d = Math.sqrt((x*x)*4.0 + z*z); mask = Math.max(0, 1.0 - d); nAmp = 1.4; nScale = 0.8; }
+                else if (type === 3) { mask = Math.pow(Math.max(0, 1.0 - Math.max(Math.abs(x), Math.abs(z))), 0.5); nAmp = 1.0; nScale = 1.2; }
+                else if (type === 4) { const d1 = Math.sqrt(Math.pow(x-0.4, 2) + z*z); const d2 = Math.sqrt(Math.pow(x+0.4, 2) + z*z); mask = Math.max(Math.max(0, 0.9 - d1), Math.max(0, 0.9 - d2)); nAmp = 1.3; }
+                else if (type === 5) { let d = Math.sqrt(x*x + z*z); mask = Math.max(0, 1.0 - d); if (d < 0.3) mask -= (0.3 - d) * 2.0; mask = Math.max(0, mask); nAmp = 0.8; nScale = 1.5; }
 
-                // --- Noise ---
                 let n = Noise.ridged(x, z, seed, 4, nScale);
                 let baseN = Noise.fbm(x, z, seed+100, 2, 0.5, 0.5);
                 let h = mask * 1.5 + (mask * n * 0.5 * nAmp) + (mask * baseN * 0.2);
                 pos.setY(i, h);
             }
-
             geometry.computeVertexNormals();
             
-            // --- Coloring ---
             const colors = [];
             const normals = geometry.attributes.normal;
             const cGrass = new THREE.Color(0x3a4f3a);
@@ -167,7 +142,6 @@
                 const y = pos.getY(i);
                 const slope = normals.getY(i);
                 let col = new THREE.Color();
-
                 if (y < 0.1) col.copy(cGrass).lerp(cRock, y * 10);
                 else {
                     if (slope > 0.7) col.copy(cRock).lerp(cPeak, 0.5);
@@ -179,39 +153,40 @@
                 colors.push(col.r, col.g, col.b);
             }
             geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
-
             const material = new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.9, metalness: 0.1 });
             const mesh = new THREE.Mesh(geometry, material);
-            mesh.castShadow = true; 
-            mesh.receiveShadow = true;
+            mesh.castShadow = true; mesh.receiveShadow = true;
             return mesh;
         }
     };
 
     // --- ENGINE CORE ---
     const Engine = {
-        
         async init() {
             if (isRunning) return;
             isRunning = true;
             await waitForDOM();
-
-            // Setup UI
             this.setupDOM();
 
-            // Load Deps
             if (typeof THREE === 'undefined') await loadScript(CONFIG.threeCDN);
             if (!THREE.OrbitControls) await loadScript(CONFIG.orbitCDN);
 
-            // Generate Assets
             AssetGenerator.generatePrototypes();
-
-            // Setup Scene
             this.setupScene();
             
-            // Generate First Chunk
+            // Build Map
             this.generateChunk(1, -(CHUNK_SIZE * TILE_SIZE) / 2, -(CHUNK_SIZE * TILE_SIZE) / 2);
             
+            // --- READY STATE ---
+            isReady = true;
+            console.log(" [Library] Engine Ready. Processing Queue...");
+            
+            // Process any data that came in while we were loading
+            if (queuedGameData) {
+                this.parseMapCommand(queuedGameData);
+                queuedGameData = null;
+            }
+
             this.startLoop();
         },
 
@@ -254,13 +229,9 @@
             const tile = new THREE.Mesh(geo, mat);
             tile.position.set(x, 0, z);
             tile.userData = { chunkId: chunkId, gridLocation: {x: localX, z: localZ}, originalColor: COLORS.BASE };
-            
-            // Border
             const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geo), new THREE.LineBasicMaterial({color: COLORS.BORDER}));
             tile.add(edges);
             tileGroup.add(tile);
-
-            // Register for lookup
             const key = `${chunkId}_${localX}_${localZ}`;
             tileRegistry[key] = tile;
         },
@@ -273,71 +244,44 @@
             }
         },
 
-        // --- MAP PARSER ---
         parseMapCommand(text) {
+            // IF ENGINE NOT READY, QUEUE IT
+            if (!isReady) {
+                console.log(" [Library] Engine initializing... Map Data Queued.");
+                queuedGameData = text;
+                return;
+            }
+
             console.log(" [Library] Parsing Map Command...");
             try {
-                // Remove whitespace/newlines for easier regex
                 const cleanText = text.replace(/\n/g, " ").trim();
-                
-                // Extract Content between <TileMap> tags
                 const tagMatch = cleanText.match(/<TileMap>(.*?)<\/TileMap>/i);
                 if (!tagMatch) return;
-                
                 const content = tagMatch[1];
-                
-                // Find Chunk ID
                 const chunkMatch = content.match(/Chunk\s*=\s*(\d+)/i);
-                if (!chunkMatch) { console.warn("No Chunk ID found"); return; }
+                if (!chunkMatch) return;
                 const chunkId = chunkMatch[1];
-
-                // Find Locations (M : ...)
-                // Regex looks for "Location = M : " followed by coords
                 const locMatch = content.match(/Location\s*=\s*M\s*:\s*([0-9,\|]+)/i);
-                
                 if (locMatch) {
-                    const coordString = locMatch[1];
-                    const coords = coordString.split('|');
-                    
-                    coords.forEach(pair => {
+                    locMatch[1].split('|').forEach(pair => {
                         const [tx, tz] = pair.split(',').map(n => n.trim());
                         this.addMountainToTile(chunkId, tx, tz);
                     });
                 }
-
-            } catch(e) {
-                console.error(" [Library] Map Parse Error:", e);
-            }
+            } catch(e) { console.error("Map Parse Error", e); }
         },
 
         addMountainToTile(chunkId, x, z) {
             const key = `${chunkId}_${x}_${z}`;
             const tile = tileRegistry[key];
-            if (!tile) {
-                console.warn(` [Library] Tile not found: ${key}`);
-                return;
-            }
-
-            // Check if already has mountain
+            if (!tile) return;
             if (tile.userData.hasMountain) return;
-
-            // Pick Random Mountain Prototype (0 to 4)
             const typeIndex = Math.floor(Math.random() * 5);
-            const prototype = mountainAssets[typeIndex];
-
-            // Clone mesh
-            const mountain = prototype.clone();
-            
-            // Adjust position relative to tile
-            // Tile is at y=0, height=0.2. Mountain base should be at 0.1
+            const mountain = mountainAssets[typeIndex].clone();
             mountain.position.set(0, 0.1, 0); 
-            
-            // Random rotation for variety
             mountain.rotation.y = Math.random() * Math.PI * 2;
-
             tile.add(mountain);
             tile.userData.hasMountain = true;
-            console.log(` [Library] Added Mountain (Type ${typeIndex+1}) at ${key}`);
         },
 
         startLoop() {
@@ -365,25 +309,9 @@
         }
     };
 
-    // --- EXPOSE API ---
-    
-    // 1. Protocol Listener (Start)
     let pVal = "";
-    Object.defineProperty(global, 'Protocol', {
-        get: () => pVal,
-        set: (v) => { pVal = v; if(v==="Start") Engine.init(); }
-    });
-
-    // 2. MapData Listener (AI Commands)
+    Object.defineProperty(global, 'Protocol', { get: () => pVal, set: (v) => { pVal = v; if(v==="Start") Engine.init(); } });
     let mVal = "";
-    Object.defineProperty(global, 'GameData', {
-        get: () => mVal,
-        set: (v) => { 
-            mVal = v; 
-            Engine.parseMapCommand(v); 
-        }
-    });
-
+    Object.defineProperty(global, 'GameData', { get: () => mVal, set: (v) => { mVal = v; Engine.parseMapCommand(v); } });
     global.ChunkGameLib = { init: () => Engine.init() };
-
 })(window);
