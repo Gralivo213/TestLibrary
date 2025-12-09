@@ -28,7 +28,6 @@
     // --- UTILITIES ---
     function loadScript(src) {
         return new Promise((resolve, reject) => {
-            // Check if already exists
             if (document.querySelector(`script[src="${src}"]`)) {
                 resolve();
                 return;
@@ -36,12 +35,18 @@
             console.log(` [Library] Fetching dependency: ${src}`);
             const script = document.createElement('script');
             script.src = src;
+            script.crossOrigin = "anonymous"; // Fix for Tracking Prevention warnings
             script.onload = () => {
                 console.log(` [Library] Dependency loaded: ${src}`);
                 resolve();
             };
             script.onerror = (e) => {
                 console.error(` [Library] Failed to load: ${src}`, e);
+                // Visual error feedback
+                const errDiv = document.createElement('div');
+                errDiv.style.cssText = "position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:red;background:white;padding:20px;border:2px solid red;";
+                errDiv.innerText = "Error: Failed to load 3D Engine dependencies. Check Console.";
+                document.body.appendChild(errDiv);
                 reject(e);
             };
             document.head.appendChild(script);
@@ -50,7 +55,6 @@
 
     function waitForDOM() {
         return new Promise(resolve => {
-            // Robust check: if body exists or readyState is complete/interactive, go ahead.
             if (document.body || document.readyState === 'complete' || document.readyState === 'interactive') {
                 resolve();
             } else {
@@ -64,34 +68,46 @@
     const Engine = {
         
         async init() {
-            if (isRunning) {
-                console.log(" [Library] Engine already running.");
-                return;
-            }
-            isRunning = true; // Prevent double firing
+            if (isRunning) return;
+            isRunning = true;
             console.log(" [Library] Initialization Triggered.");
 
-            // 1. Wait for HTML Body to exist (Crucial fix)
+            // 1. Wait for DOM
             await waitForDOM();
 
-            // 2. Ensure Dependencies are ready
-            if (typeof THREE === 'undefined') {
-                await loadScript(CONFIG.threeCDN);
-            }
-            if (typeof THREE.OrbitControls === 'undefined') {
-                // Check if OrbitControls is inside THREE (newer versions) or separate
-                if (!THREE.OrbitControls) { 
-                    await loadScript(CONFIG.orbitCDN);
+            // 2. Show Loading Indicator (Visual Confirmation)
+            const loader = document.createElement('div');
+            loader.id = 'lib-loader';
+            loader.style.cssText = "position:absolute; top:20px; right:20px; color:white; background:black; padding:10px; font-family:sans-serif; z-index:10000;";
+            loader.innerText = "Loading 3D Engine...";
+            document.body.appendChild(loader);
+
+            try {
+                // 3. Ensure Dependencies are ready
+                if (typeof THREE === 'undefined') {
+                    await loadScript(CONFIG.threeCDN);
                 }
+                if (typeof THREE !== 'undefined' && typeof THREE.OrbitControls === 'undefined') {
+                    if (!THREE.OrbitControls) { 
+                        await loadScript(CONFIG.orbitCDN);
+                    }
+                }
+
+                // Remove loader
+                if (loader) loader.remove();
+
+                console.log(" [Library] Dependencies ready. Starting Scene.");
+
+                // 4. Start the Game
+                this.setupDOM();
+                this.setupScene();
+                this.generateChunk(1, -(CHUNK_SIZE * TILE_SIZE) / 2, -(CHUNK_SIZE * TILE_SIZE) / 2);
+                this.startLoop();
+
+            } catch (err) {
+                console.error(" [Library] Critical Error during init:", err);
+                if (loader) loader.innerText = "Error Loading Engine";
             }
-
-            console.log(" [Library] Dependencies ready. Starting Scene.");
-
-            // 3. Start the Game
-            this.setupDOM();
-            this.setupScene();
-            this.generateChunk(1, -(CHUNK_SIZE * TILE_SIZE) / 2, -(CHUNK_SIZE * TILE_SIZE) / 2);
-            this.startLoop();
         },
 
         setupDOM() {
@@ -259,14 +275,9 @@
     };
 
     // --- EXPOSE API ---
-    
-    // 1. Capture existing value if user defined Protocol before script loaded
     let existingProtocol = global.Protocol;
-    
-    // 2. Define the Property with Getter/Setter
     let protocolValue = existingProtocol || "";
     
-    // Safe define
     try {
         Object.defineProperty(global, 'Protocol', {
             get: function() { return protocolValue; },
@@ -280,12 +291,9 @@
             configurable: true
         });
     } catch(e) {
-        console.error(" [Library] Could not define 'Protocol' getter/setter. Manual init required if Protocol doesn't work.", e);
-        // Fallback: If defineProperty fails (rare), check variable polling? 
-        // No, usually just means variable was declared with 'var' in non-configurable context.
+        console.error(" [Library] API Error:", e);
     }
 
-    // 3. Expose Engine Methods
     global.ChunkGameLib = {
         init: () => Engine.init(),
         addChunk: (id, x, z) => Engine.generateChunk(id, x, z)
@@ -293,9 +301,8 @@
 
     console.log(" [Library] Ready. Waiting for Protocol='Start'...");
 
-    // 4. Trigger immediately if it was already set
     if (existingProtocol === "Start") {
-        console.log(" [Library] Detected pre-set Protocol. Starting...");
+        console.log(" [Library] Auto-starting...");
         Engine.init();
     }
 
