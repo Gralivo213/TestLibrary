@@ -116,6 +116,7 @@
             this.validMoves = []; 
             this.selectedPath = []; 
             this.animStartTime = 0;
+            this.herbData = {};
             
             // UI Elements
             this.ui = {
@@ -233,17 +234,34 @@
                 .iso-herb-panel.visible {
                     opacity: 1;
                     transform: translateY(0);
-                    pointer-events: auto;
+pointer-events: auto;
                 }
+                @font-face { font-family: 'KoreanCalligraphy'; src: url('https://raw.githubusercontent.com/Gralivo213/TestLibrary/main/Font/Korean_Calligraphy.ttf'); }
+                .iso-herb-details {
+                    padding: 15% 12%;
+                    font-family: 'KoreanCalligraphy', serif;
+                    color: #2b1d0e;
+                    height: 100%;
+                    box-sizing: border-box;
+                    display: flex;
+                    flex-direction: column;
+                    text-align: center;
+                }
+                .herb-title { font-size: 22px; border-bottom: 2px solid rgba(43, 29, 14, 0.3); padding-bottom: 12px; margin-bottom: 15px; line-height: 1.3; font-weight: bold; }
+                .herb-elem { font-size: 0.65em; vertical-align: super; font-weight: bold; margin-left: 2px; }
+                .herb-lore { font-size: 18px; flex-grow: 1; overflow-y: auto; text-align: justify; margin-bottom: 20px; white-space: pre-wrap; line-height: 1.5; }
+                .growth-wrap { margin-top: auto; text-align: left; width: 100%; }
+                .growth-txt { font-size: 16px; margin-bottom: 6px; font-weight: bold; color: #2b1d0e; text-align: center; }
+                .growth-track { height: 10px; width: 100%; background: linear-gradient(90deg, #d32f2f, #fbc02d, #388e3c); border-radius: 5px; border: 1px solid #3e2723; position: relative; }
+                .growth-stick { position: absolute; top: -5px; width: 4px; height: 20px; background: #000; border: 1px solid #fff; transform: translateX(-50%); box-shadow: 0 0 2px rgba(0,0,0,0.5); }
             `;
             document.head.appendChild(style);
 
-// Herb UI
+            // Herb UI
             const herbPanel = document.createElement('div');
             herbPanel.className = 'iso-herb-panel';
             document.body.appendChild(herbPanel);
             this.ui.herbPanel = herbPanel;
-
             // 2. Play Button
             const playBtn = document.createElement('div');
             playBtn.className = 'iso-play-btn';
@@ -311,7 +329,27 @@
             }
         }
 
-        parseMapData(dataStr) {
+     parseMapData(dataStr) {
+            // Parse Herb Data
+            const herbRegex = /<Herb>([\s\S]*?)<\/Herb>/g;
+            let herbMatch;
+            while ((herbMatch = herbRegex.exec(dataStr)) !== null) {
+                const content = herbMatch[1];
+                const tileMatch = content.match(/Tile\s*=\s*(\d+)[.,](\d+)/i);
+                if (tileMatch) {
+                    const k = `${tileMatch[1]},${tileMatch[2]}`;
+                    const getV = (r) => (content.match(r) || [])[1] || '';
+                    this.herbData[k] = {
+                        age: getV(/Age\s*=\s*(.*)/i).trim(),
+                        rank: getV(/Rank\s*=\s*(.*)/i).trim(),
+                        name: getV(/Name\s*=\s*(.*)/i).trim(),
+                        element: getV(/Element\s*=\s*(.*)/i).trim(),
+                        lore: getV(/Lore\s*=\s*(.*)/i).trim(),
+                        growth: parseInt(getV(/Growth\s*=\s*(\d+)/i)) || 0
+                    };
+                }
+            }
+
             const chunkMatch = dataStr.match(/Chunk\s*=\s*(\d+)/);
             if (!chunkMatch) return;
             const chunkId = parseInt(chunkMatch[1]);
@@ -730,10 +768,38 @@
                     this.player.visualLx = this.player.lx;
                     this.player.visualLy = this.player.ly;
 
-                    // Check for Herb Interaction
+                   // Check for Herb Interaction
                     const tile = this.getTile(this.player.chunkId, this.player.lx, this.player.ly);
                     if (tile && tile.assetType === 'H') {
-                        if (this.ui.herbPanel) this.ui.herbPanel.classList.add('visible');
+                        if (this.ui.herbPanel) {
+                            const data = this.herbData[`${tile.lx},${tile.ly}`];
+                            if (data) {
+                                const colors = { 'Fire': '#d32f2f', 'Earth': '#795548', 'Ice': '#81d4fa', 'Wind': '#9e9e9e', 'Water': '#1a237e' };
+                                const color = colors[data.element] || '#000';
+                                let phase = 'Early';
+                                if (data.growth >= 100) phase = 'Peak';
+                                else if (data.growth >= 75) phase = 'Ripe';
+                                else if (data.growth >= 50) phase = 'Mature';
+                                else if (data.growth >= 25) phase = 'Adult';
+                                
+                                this.ui.herbPanel.innerHTML = `
+                                    <div class="iso-herb-details">
+                                        <div class="herb-title">
+                                            ${data.age} ${data.rank} ${data.name}. 
+                                            <span class="herb-elem" style="color:${color}">^${data.element}</span>
+                                        </div>
+                                        <div class="herb-lore">${data.lore}</div>
+                                        <div class="growth-wrap">
+                                            <div class="growth-txt">${phase}</div>
+                                            <div class="growth-track">
+                                                <div class="growth-stick" style="left: ${data.growth}%"></div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                `;
+                            }
+                            this.ui.herbPanel.classList.add('visible');
+                        }
                     }
                     return;
                 }
